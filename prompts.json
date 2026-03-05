@@ -1,0 +1,25 @@
+{
+  "version": "1.0",
+  "categories": [
+    "论文阅读",
+    "代码审阅",
+    "概念解释",
+    "代码生成"
+  ],
+  "prompts": [
+    {
+      "id": "a4c72234-9871-484f-8fc9-dbfad1e7ba5c",
+      "category": "论文阅读",
+      "title": "1",
+      "modules": {
+        "role": "1",
+        "context": "1",
+        "task": "1",
+        "constraints": "1",
+        "format": "1"
+      },
+      "createdAt": "2026-03-05T10:09:51.944Z",
+      "updatedAt": "2026-03-05T10:09:55.416Z"
+    }
+  ]
+}
