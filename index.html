@@ -398,6 +398,22 @@
       flex: 1;
     }
 
+    /* ===== 恢复提示栏 ===== */
+    .restore-bar {
+      grid-column: 1 / -1;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 24px;
+      background-color: var(--md-sys-color-primary-container);
+      color: var(--md-sys-color-on-primary-container);
+      font-size: 14px;
+    }
+
+    .restore-bar span {
+      flex: 1;
+    }
+
     /* ===== 滚动条样式 ===== */
     ::-webkit-scrollbar {
       width: 8px;
@@ -438,6 +454,14 @@
           </template>
         </div>
       </header>
+
+      <!-- 恢复文件提示栏 -->
+      <div class="restore-bar" v-if="cachedFile && !fileHandle">
+        <span class="material-symbols-outlined">history</span>
+        <span>检测到上次编辑的文件：{{ cachedFile.name }}</span>
+        <md-filled-tonal-button @click="restoreFile">恢复</md-filled-tonal-button>
+        <md-text-button @click="dismissRestore">忽略</md-text-button>
+      </div>
 
       <!-- 左栏 - 侧边栏 -->
       <aside class="sidebar">
@@ -649,6 +673,44 @@
   </div>
 
   <script>
+    // ===== IndexedDB 工具函数 =====
+    const DB_NAME = 'PromptManagerDB';
+    const STORE_NAME = 'fileHandles';
+
+    async function openDB() {
+      return new Promise((resolve, reject) => {
+        const request = indexedDB.open(DB_NAME, 1);
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => resolve(request.result);
+        request.onupgradeneeded = (e) => {
+          e.target.result.createObjectStore(STORE_NAME, { keyPath: 'id' });
+        };
+      });
+    }
+
+    async function saveFileHandle(handle) {
+      const db = await openDB();
+      const tx = db.transaction(STORE_NAME, 'readwrite');
+      tx.objectStore(STORE_NAME).put({ id: 'lastFile', handle, name: handle.name });
+    }
+
+    async function getFileHandle() {
+      const db = await openDB();
+      const tx = db.transaction(STORE_NAME, 'readonly');
+      return new Promise((resolve) => {
+        const request = tx.objectStore(STORE_NAME).get('lastFile');
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => resolve(null);
+      });
+    }
+
+    async function clearFileHandle() {
+      const db = await openDB();
+      const tx = db.transaction(STORE_NAME, 'readwrite');
+      tx.objectStore(STORE_NAME).delete('lastFile');
+    }
+
+    // ===== Vue 应用 =====
     const { createApp, ref, computed, watch, onMounted, onBeforeUnmount } = Vue;
 
     createApp({
@@ -657,6 +719,7 @@
         const fileHandle = ref(null);
         const fileName = ref('');
         const hasUnsavedChanges = ref(false);
+        const cachedFile = ref(null);  // IndexedDB 缓存的文件 { name, handle }
         
         // ===== 数据状态 =====
         const data = ref({
@@ -738,6 +801,7 @@
             
             currentPrompt.value = null;
             hasUnsavedChanges.value = false;
+            await saveFileHandle(handle);
             showToast('文件已打开');
           } catch (err) {
             if (err.name !== 'AbortError') {
@@ -768,6 +832,7 @@
             
             await saveToFile();
             currentPrompt.value = null;
+            await saveFileHandle(handle);
             showToast('新文件已创建');
           } catch (err) {
             if (err.name !== 'AbortError') {
@@ -791,6 +856,44 @@
             console.error('保存失败:', err);
             showToast('保存失败');
           }
+        }
+        
+        // ===== 恢复缓存文件 =====
+        async function restoreFile() {
+          if (!cachedFile.value?.handle) return;
+          
+          try {
+            const permission = await cachedFile.value.handle.requestPermission({ mode: 'readwrite' });
+            if (permission === 'granted') {
+              fileHandle.value = cachedFile.value.handle;
+              fileName.value = cachedFile.value.name;
+              
+              const file = await cachedFile.value.handle.getFile();
+              const text = await file.text();
+              const parsed = JSON.parse(text);
+              
+              data.value = {
+                version: parsed.version || '1.0',
+                categories: parsed.categories || ['论文阅读', '代码审阅', '概念解释', '代码生成'],
+                prompts: parsed.prompts || []
+              };
+              
+              currentPrompt.value = null;
+              hasUnsavedChanges.value = false;
+              showToast('文件已恢复');
+            } else {
+              showToast('需要授权才能访问文件');
+            }
+          } catch (err) {
+            console.error('恢复文件失败:', err);
+            await clearFileHandle();
+            showToast('无法恢复文件，请重新打开');
+          }
+          cachedFile.value = null;
+        }
+        
+        function dismissRestore() {
+          cachedFile.value = null;
         }
         
         // ===== 提示词操作 =====
@@ -933,9 +1036,19 @@
           }
         }
         
-        onMounted(() => {
+        onMounted(async () => {
           window.addEventListener('beforeunload', handleBeforeUnload);
           window.addEventListener('keydown', handleKeydown);
+          
+          // 检查 IndexedDB 缓存
+          try {
+            const cached = await getFileHandle();
+            if (cached?.handle) {
+              cachedFile.value = { name: cached.name, handle: cached.handle };
+            }
+          } catch (err) {
+            console.error('读取缓存失败:', err);
+          }
         });
         
         onBeforeUnmount(() => {
@@ -959,6 +1072,7 @@
           toast,
           showCategoryInput,
           newCategoryName,
+          cachedFile,
           
           // 计算属性
           filteredPrompts,
@@ -977,7 +1091,9 @@
           closeDeleteDialog,
           toggleCategory,
           addCategory,
-          copyToClipboard
+          copyToClipboard,
+          restoreFile,
+          dismissRestore
         };
       }
     }).mount('#app');
